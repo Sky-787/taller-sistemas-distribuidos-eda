@@ -128,7 +128,7 @@ class TestServerlessEventDrivenArchitecture(unittest.TestCase):
         self.assertEqual(cache_res.status_code, 200)
         data = cache_res.json()
         self.assertIn("spaces", data)
-        print(" [PASS] LAB 8 (EDA Integration): orders-service sincroniza caché local mediante webhook")
+        print(" [PASS] LAB 7 (EDA Integration): orders-service sincroniza caché local mediante webhook")
 
     def test_05_orders_service_resilience_fallback_when_catalog_down(self):
         """
@@ -156,7 +156,7 @@ class TestServerlessEventDrivenArchitecture(unittest.TestCase):
         self.assertEqual(order["fulfillment_source"], "EVENT_CACHE_FALLBACK")
         self.assertEqual(order["total_price"], 45.0)
         self.assertEqual(order["status"], "CONFIRMED")
-        print(" [PASS] Resiliencia EDA: orders-service completa orden en modo Fallback con catálogo caído")
+        print(" [PASS] LAB 7 (Resiliencia EDA): orders-service completa orden en modo Fallback con catálogo caído")
 
 if __name__ == "__main__":
     unittest.main()
