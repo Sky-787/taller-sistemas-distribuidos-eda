@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Taller 2: De Microservicios a Sistemas Distribuidos Inteligentes
+  Clase 3: Serverless - Migración Event-Driven con AWS Lambda, API Gateway, EventBridge y SQS
+
+Globals:
+  Function:
+    Timeout: 15
+    MemorySize: 256
+    Runtime: python3.11
+    Environment:
+      Variables:
+        LOG_LEVEL: INFO
+
+Resources:
+  # ==============================================================================
+  # API GATEWAY (Entrada HTTP REST para el catálogo)
+  # ==============================================================================
+  CatalogApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Cors:
+        AllowMethods: "'GET,POST,PUT,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: "'*'"
+
+  # ==============================================================================
+  # LAB 6: LAMBDA CATALOG-SERVICE (catalog-fn)
+  # ==============================================================================
+  CatalogFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: catalog-fn
+      CodeUri: lambda-catalog/
+      Handler: handler.lambda_handler
+      Description: Servicio de catálogo serverless que expone espacios y emite eventos en EventBridge
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: "*"
+      Environment:
+        Variables:
+          EVENT_BUS_NAME: default
+      Events:
+        GetHealth:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CatalogApi
+            Path: /health
+            Method: GET
+        GetSpaces:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CatalogApi
+            Path: /spaces
+            Method: GET
+        GetSpaceById:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CatalogApi
+            Path: /spaces/{id}
+            Method: GET
+        UpdateAvailability:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CatalogApi
+            Path: /spaces/{id}/availability
+            Method: PUT
+        UpdateAvailabilityPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CatalogApi
+            Path: /spaces/{id}/availability
+            Method: POST
+
+  # ==============================================================================
+  # DEAD LETTER QUEUE (Resiliencia distribuida)
+  # ==============================================================================
+  CatalogEventsDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: catalog-events-dlq
+      MessageRetentionPeriod: 1209600 # 14 días
+
+  # ==============================================================================
+  # SQS QUEUE: catalog-events (Buffer desacoplador para consumidores)
+  # ==============================================================================
+  CatalogEventsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: catalog-events
+      VisibilityTimeout: 90
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt CatalogEventsDLQ.Arn
+        maxReceiveCount: 3
+
+  # Política de SQS para permitir que EventBridge publique mensajes en la cola
+  CatalogEventsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref CatalogEventsQueue
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt CatalogEventsQueue.Arn
+
+  # ==============================================================================
+  # EVENTBRIDGE RULE: SpaceChanged
+  # ==============================================================================
+  SpaceChangedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: SpaceChangedRule
+      Description: Captura eventos SpaceChanged del catálogo y los redirige a la cola SQS catalog-events
+      EventPattern:
+        source:
+          - coworking.catalog
+        detail-type:
+          - SpaceChanged
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt CatalogEventsQueue.Arn
+          Id: CatalogEventsQueueTarget
+
+  # ==============================================================================
+  # LAB 7: LAMBDA CONSUMIDORA (consumer-fn)
+  # ==============================================================================
+  ConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: consumer-fn
+      CodeUri: lambda-consumer/
+      Handler: handler.lambda_handler
+      Description: Consume eventos desde SQS catalog-events y sincroniza el estado con orders-service
+      Environment:
+        Variables:
+          ORDERS_SERVICE_URL: http://orders-service:8002
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt CatalogEventsQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+Outputs:
+  CatalogApiUrl:
+    Description: URL pública de API Gateway para el catálogo de espacios
+    Value: !Sub "https://${CatalogApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/spaces"
+  CatalogFunctionArn:
+    Description: ARN de la Lambda Catalog-fn
+    Value: !GetAtt CatalogFunction.Arn
+  CatalogEventsQueueUrl:
+    Description: URL de la cola SQS catalog-events
+    Value: !Ref CatalogEventsQueue
+  CatalogEventsQueueArn:
+    Description: ARN de la cola SQS catalog-events
+    Value: !GetAtt CatalogEventsQueue.Arn
+  ConsumerFunctionArn:
+    Description: ARN de la Lambda Consumer-fn
+    Value: !GetAtt ConsumerFunction.Arn

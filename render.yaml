@@ -1,0 +1,35 @@
+services:
+  # ==============================================================================
+  # ORDERS SERVICE (Web Service en Render)
+  # ==============================================================================
+  - type: web
+    name: orders-service-coworking
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: orders-service
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: CATALOG_SERVICE_URL
+        fromService:
+          type: web
+          name: catalog-service-coworking
+          property: host
+
+  # ==============================================================================
+  # CATALOG SERVICE (Web Service en Render)
+  # ==============================================================================
+  - type: web
+    name: catalog-service-coworking
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: catalog-service
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0

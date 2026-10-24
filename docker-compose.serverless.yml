@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  # Microservicio de Órdenes (Receptor de eventos y consumidor)
+  orders-service:
+    build:
+      context: ./orders-service
+      dockerfile: Dockerfile
+    container_name: orders-service-eda
+    ports:
+      - "8002:8002"
+    environment:
+      - CATALOG_SERVICE_URL=http://localstack:4566/restapis/catalog-api/prod/_user_request_/spaces
+      - ORDERS_SERVICE_PORT=8002
+    networks:
+      - coworking-eda-network
+    restart: unless-stopped
+
+  # Emulador Local de Servicios AWS (EventBridge, SQS, Lambda, API Gateway)
+  localstack:
+    image: localstack/localstack:3.0.2
+    container_name: localstack-coworking
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=events,sqs,lambda,apigateway
+      - AWS_DEFAULT_REGION=us-east-1
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./scripts/init-localstack.sh:/etc/localstack/init/ready.d/init-aws.sh"
+    networks:
+      - coworking-eda-network
+
+networks:
+  coworking-eda-network:
+    name: coworking-eda-network
+    driver: bridge
