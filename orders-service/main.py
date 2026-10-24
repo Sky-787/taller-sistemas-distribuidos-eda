@@ -18,8 +18,10 @@ app = FastAPI(
 
 # URL del catalog-service configurable por variable de entorno
 CATALOG_SERVICE_URL = os.getenv("CATALOG_SERVICE_URL", "http://catalog-service:8001")
-if CATALOG_SERVICE_URL and not CATALOG_SERVICE_URL.startswith(("http://", "https://")):
-    CATALOG_SERVICE_URL = f"https://{CATALOG_SERVICE_URL}"
+if "catalog-service-coworking" in CATALOG_SERVICE_URL and not CATALOG_SERVICE_URL.endswith(".onrender.com"):
+    CATALOG_SERVICE_URL = "https://catalog-service-coworking.onrender.com"
+elif CATALOG_SERVICE_URL and not CATALOG_SERVICE_URL.startswith(("http://", "https://")):
+    CATALOG_SERVICE_URL = f"http://{CATALOG_SERVICE_URL}"
 
 # Caché local de espacios sincronizada mediante eventos (Event-Carried State Transfer)
 SPACES_CACHE: Dict[int, Dict[str, Any]] = {
@@ -128,7 +130,7 @@ async def create_order(
 
     # 1. Intentar consulta síncrona
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(catalog_url)
             if response.status_code == 200:
                 space_data = response.json()

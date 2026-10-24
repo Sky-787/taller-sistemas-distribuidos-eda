@@ -14,10 +14,7 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.0
       - key: CATALOG_SERVICE_URL
-        fromService:
-          type: web
-          name: catalog-service-coworking
-          property: host
+        value: https://catalog-service-coworking.onrender.com
 
   # ==============================================================================
   # CATALOG SERVICE (Web Service en Render)
