@@ -44,6 +44,19 @@ class Order(BaseModel):
 # Almacenamiento en memoria para órdenes
 ORDERS: List[Order] = []
 
+@app.get("/", tags=["Inicio"])
+def root():
+    return {
+        "message": "Microservicio de Órdenes de Coworking (FastAPI)",
+        "docs_url": "/docs",
+        "endpoints": {
+            "health": "/health",
+            "orders": "/orders",
+            "catalog_cache": "/catalog-cache",
+            "event_webhook": "/events/space-changed"
+        }
+    }
+
 @app.get("/health", tags=["Salud"])
 def health_check():
     """Endpoint de verificación de salud del microservicio de órdenes."""

@@ -24,6 +24,18 @@ SPACES: List[Space] = [
     Space(id=4, name="Auditorio Principal", capacity=25, hourly_rate=150.0, available=True),
 ]
 
+@app.get("/", tags=["Inicio"])
+def root():
+    return {
+        "message": "Microservicio de Catálogo de Coworking (FastAPI)",
+        "docs_url": "/docs",
+        "endpoints": {
+            "health": "/health",
+            "spaces": "/spaces",
+            "space_detail": "/spaces/{id}"
+        }
+    }
+
 @app.get("/health", tags=["Salud"])
 def health_check():
     """Endpoint de verificación de salud del microservicio."""
