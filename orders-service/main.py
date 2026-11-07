@@ -3,8 +3,12 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 import httpx
-from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi import FastAPI, HTTPException, Query, Body, Depends
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+
+from database import get_db, init_db, OrderModel, OrderStatus, FulfillmentSource
 
 # Configuración de Logging
 logging.basicConfig(level=logging.INFO)
@@ -12,16 +16,18 @@ logger = logging.getLogger("orders-service")
 
 app = FastAPI(
     title="Orders Service",
-    description="Servicio de gestión de órdenes de reserva de coworking con resiliencia y soporte Event-Driven",
-    version="2.0.0"
+    description="Servicio de gestión de órdenes de reserva de coworking con PostgreSQL y soporte Event-Driven",
+    version="3.0.0"
 )
 
-# URL del catalog-service configurable por variable de entorno
+# URLs de otros servicios (configurables por variables de entorno)
 CATALOG_SERVICE_URL = os.getenv("CATALOG_SERVICE_URL", "http://catalog-service:8001")
 if "catalog-service-coworking" in CATALOG_SERVICE_URL and not CATALOG_SERVICE_URL.endswith(".onrender.com"):
     CATALOG_SERVICE_URL = "https://catalog-service-coworking.onrender.com"
 elif CATALOG_SERVICE_URL and not CATALOG_SERVICE_URL.startswith(("http://", "https://")):
     CATALOG_SERVICE_URL = f"http://{CATALOG_SERVICE_URL}"
+
+ANALYTICS_SERVICE_URL = os.getenv("ANALYTICS_SERVICE_URL", "http://analytics-service:8003")
 
 # Caché local de espacios sincronizada mediante eventos (Event-Carried State Transfer)
 SPACES_CACHE: Dict[int, Dict[str, Any]] = {
@@ -31,7 +37,9 @@ SPACES_CACHE: Dict[int, Dict[str, Any]] = {
     4: {"id": 4, "name": "Auditorio Principal", "price_per_hour": 150.0, "hourly_rate": 150.0, "available": True},
 }
 
-class Order(BaseModel):
+
+# ─── Modelo Pydantic de respuesta ─────────────────────────────────
+class OrderResponse(BaseModel):
     id: int
     space_id: int
     space_name: Optional[str] = None
@@ -40,16 +48,26 @@ class Order(BaseModel):
     price_per_hour: float
     total_price: float
     status: str = "CONFIRMED"
-    fulfillment_source: str = "SYNCHRONOUS_CATALOG"  # "SYNCHRONOUS_CATALOG" o "EVENT_CACHE_FALLBACK"
+    fulfillment_source: str = "SYNCHRONOUS_CATALOG"
     created_at: str
 
-# Almacenamiento en memoria para órdenes
-ORDERS: List[Order] = []
 
+# ─── Eventos de Startup ──────────────────────────────────────────
+@app.on_event("startup")
+def on_startup():
+    """Inicializa la base de datos PostgreSQL al arrancar."""
+    try:
+        init_db()
+        logger.info("Base de datos PostgreSQL inicializada correctamente")
+    except Exception as e:
+        logger.error(f"Error al inicializar PostgreSQL: {e}")
+
+
+# ─── Endpoints ────────────────────────────────────────────────────
 @app.get("/", tags=["Inicio"])
 def root():
     return {
-        "message": "Microservicio de Órdenes de Coworking (FastAPI)",
+        "message": "Microservicio de Órdenes de Coworking (FastAPI + PostgreSQL)",
         "docs_url": "/docs",
         "endpoints": {
             "health": "/health",
@@ -59,15 +77,30 @@ def root():
         }
     }
 
-@app.get("/health", tags=["Salud"])
-def health_check():
-    """Endpoint de verificación de salud del microservicio de órdenes."""
-    return {"status": "ok", "service": "orders-service", "version": "2.0.0"}
 
-@app.get("/orders", response_model=List[Order], tags=["Órdenes"])
-def get_orders():
-    """Retorna el listado completo de órdenes registradas."""
-    return ORDERS
+@app.get("/health", tags=["Salud"])
+def health_check(db: Session = Depends(get_db)):
+    """Endpoint de verificación de salud del microservicio y conexión a PostgreSQL."""
+    try:
+        db.execute(text("SELECT 1"))
+        db_status = "connected"
+    except Exception:
+        db_status = "disconnected"
+
+    return {
+        "status": "ok" if db_status == "connected" else "degraded",
+        "service": "orders-service",
+        "version": "3.0.0",
+        "database": db_status
+    }
+
+
+@app.get("/orders", response_model=List[OrderResponse], tags=["Órdenes"])
+def get_orders(db: Session = Depends(get_db)):
+    """Retorna el listado completo de órdenes registradas en PostgreSQL."""
+    orders = db.query(OrderModel).order_by(OrderModel.created_at.desc()).all()
+    return [OrderResponse(**order.to_dict()) for order in orders]
+
 
 @app.get("/catalog-cache", tags=["Event-Driven Architecture"])
 def get_catalog_cache():
@@ -80,6 +113,7 @@ def get_catalog_cache():
         "cached_spaces_count": len(SPACES_CACHE),
         "spaces": list(SPACES_CACHE.values())
     }
+
 
 @app.post("/events/space-changed", tags=["Event-Driven Architecture"])
 def handle_space_changed_event(event: Dict[str, Any] = Body(...)):
@@ -110,23 +144,26 @@ def handle_space_changed_event(event: Dict[str, Any] = Body(...)):
         "cached_data": SPACES_CACHE[space_id]
     }
 
-@app.post("/orders", response_model=Order, status_code=201, tags=["Órdenes"])
+
+@app.post("/orders", response_model=OrderResponse, status_code=201, tags=["Órdenes"])
 async def create_order(
     space_id: int = Query(..., description="ID del espacio a reservar"),
     user_email: str = Query(..., description="Email del usuario que reserva"),
     hours: int = Query(..., gt=0, description="Cantidad de horas de reserva"),
-    enable_eda_fallback: bool = Query(True, description="Usar caché Event-Driven si el catálogo síncrono falla")
+    enable_eda_fallback: bool = Query(True, description="Usar caché Event-Driven si el catálogo síncrono falla"),
+    db: Session = Depends(get_db)
 ):
     """
-    Crea una nueva orden de reserva.
+    Crea una nueva orden de reserva y la persiste en PostgreSQL.
     1. Intenta consultar el catálogo síncrono por HTTP.
-    2. Si el catálogo síncrono falla (Chaos Lab 4) y enable_eda_fallback=True,
-       utiliza la caché local sincronizada por EventBridge/SQS evitando la indisponibilidad total.
-    3. Soporta tolerant reader (price_per_hour / hourly_rate) para evitar fallos por cambio de contrato (Chaos Lab 5).
+    2. Si el catálogo síncrono falla y enable_eda_fallback=True,
+       utiliza la caché local sincronizada por EventBridge/SQS.
+    3. Soporta tolerant reader (price_per_hour / hourly_rate).
+    4. Envía evento de analytics al analytics-service.
     """
     catalog_url = f"{CATALOG_SERVICE_URL}/spaces/{space_id}"
     space_data = None
-    fulfillment_source = "SYNCHRONOUS_CATALOG"
+    fulfillment_source = FulfillmentSource.SYNCHRONOUS_CATALOG
 
     # 1. Intentar consulta síncrona
     try:
@@ -143,7 +180,6 @@ async def create_order(
             raise exc
         logger.warning(f"Catálogo síncrono no responde en {catalog_url}: {exc}")
         if not enable_eda_fallback:
-            # Comportamiento estricto de Chaos Lab 4 (sin EDA)
             raise HTTPException(status_code=503, detail="Catalog service unavailable") from exc
 
     # 2. Resiliencia Event-Driven: Si el catálogo síncrono falló, usar caché local
@@ -151,7 +187,7 @@ async def create_order(
         if space_id in SPACES_CACHE:
             logger.info(f"Activando Fallback Resiliente EDA: Usando caché local para espacio #{space_id}")
             space_data = SPACES_CACHE[space_id]
-            fulfillment_source = "EVENT_CACHE_FALLBACK"
+            fulfillment_source = FulfillmentSource.EVENT_CACHE_FALLBACK
         else:
             raise HTTPException(
                 status_code=503,
@@ -180,22 +216,44 @@ async def create_order(
     total_price = round(price_per_hour * hours, 2)
     space_name = space_data.get("name", f"Espacio #{space_id}")
 
-    order = Order(
-        id=len(ORDERS) + 1,
+    # 3. Persistir en PostgreSQL
+    order = OrderModel(
         space_id=space_id,
         space_name=space_name,
         user_email=user_email,
         hours=hours,
         price_per_hour=price_per_hour,
         total_price=total_price,
-        status="CONFIRMED",
+        status=OrderStatus.CONFIRMED,
         fulfillment_source=fulfillment_source,
-        created_at=datetime.now(timezone.utc).isoformat()
+        created_at=datetime.now(timezone.utc)
     )
 
-    ORDERS.append(order)
-    logger.info(f"Orden #{order.id} creada exitosamente (Fuente: {fulfillment_source})")
-    return order
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+
+    logger.info(f"Orden #{order.id} persistida en PostgreSQL (Fuente: {fulfillment_source.value})")
+
+    # 4. Enviar evento de analytics (best-effort, no bloquea la orden)
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(f"{ANALYTICS_SERVICE_URL}/events", json={
+                "event_type": "order_created",
+                "order_id": order.id,
+                "space_id": space_id,
+                "space_name": space_name,
+                "user_email": user_email,
+                "hours": hours,
+                "price_per_hour": price_per_hour,
+                "total_price": total_price,
+                "fulfillment_source": fulfillment_source.value
+            })
+    except Exception as e:
+        logger.warning(f"No se pudo enviar evento de analytics: {e}")
+
+    return OrderResponse(**order.to_dict())
+
 
 if __name__ == "__main__":
     import uvicorn
