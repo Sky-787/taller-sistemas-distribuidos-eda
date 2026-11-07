@@ -67,7 +67,17 @@ taller/
 - [x] LAB 7: Consumer Lambda con suscripción a SQS y soporte para batching (`lambda-consumer/`)
 - [x] LAB 8: Infraestructura como Código con AWS SAM (`template.yaml` + Dead Letter Queue)
 - [x] LAB 9: Resiliencia en orders-service (Event-Carried State Transfer + Fallback ante caídas)
-- [x] LAB 10: Pruebas unitarias, de integración y simulación interactiva (`test_serverless_pipeline.py` & `simulate_event_flow.py`)
+- [x] LAB 10 (Serverless): Pruebas unitarias, de integración y simulación interactiva (`test_serverless_pipeline.py` & `simulate_event_flow.py`)
+
+### Taller 4: Backend Avanzado FastAPI
+- [x] LAB 10 (Auth & Resiliencia): Autenticación JWT + RBAC (`orders-service/auth.py`)
+- [x] Cifrado de contraseñas con bcrypt (`passlib` + `bcrypt`)
+- [x] Persistencia de usuarios en PostgreSQL AWS RDS (`UserModel` + Migración Alembic `8f5e47c59a2f`)
+- [x] Control de Acceso Basado en Roles (`user: 1 < admin: 2 < superadmin: 3`)
+- [x] Patrón Circuit Breaker para llamadas a dependencias síncronas (`orders-service/resilience.py`)
+- [x] Patrón Rate Limiting con Sliding Window y headers HTTP estándar
+- [x] Suite de pruebas automatizadas completa 12/12 PASS (`test_taller4_auth.py`)
+- [x] Documentación técnica en Markdown (`TALLER_4.md`) y Word (`Taller 4 - Reporte Tecnico.docx`)
 
 ## Convenciones del proyecto
 

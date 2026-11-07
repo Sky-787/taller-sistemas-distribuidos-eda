@@ -1,0 +1,18 @@
+{
+  "python.defaultInterpreterPath": "C:\\Python313\\python.exe",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/orders-service",
+    "${workspaceFolder}/catalog-service",
+    "${workspaceFolder}/analytics-service",
+    "C:\\Users\\u\\AppData\\Roaming\\Python\\Python313\\site-packages",
+    "C:\\Python313\\Lib\\site-packages"
+  ],
+  "python.autoComplete.extraPaths": [
+    "${workspaceFolder}/orders-service",
+    "${workspaceFolder}/catalog-service",
+    "${workspaceFolder}/analytics-service",
+    "C:\\Users\\u\\AppData\\Roaming\\Python\\Python313\\site-packages",
+    "C:\\Python313\\Lib\\site-packages"
+  ]
+}
+

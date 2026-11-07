@@ -35,6 +35,13 @@ Proyecto práctico completo que abarca desde la orquestación de microservicios 
 - **LAB 6**: Función Serverless `catalog-service` con API Gateway y publicación de eventos `SpaceChanged` en Amazon EventBridge.
 - **LAB 7**: Función Serverless Consumidora suscrita a Amazon SQS, desacoplamiento con `orders-service` mediante el patrón **Event-Carried State Transfer**, plantilla AWS SAM (`template.yaml`), suite de pruebas y despliegue.
 
+### Taller 4: Backend Avanzado FastAPI
+- **LAB 10 (Auth & Resiliencia)**: Autenticación JWT (`HS256`, 60 min) y autorización con **Control de Acceso Basado en Roles (RBAC)** (`user: 1 < admin: 2 < superadmin: 3`).
+- **Persistencia PostgreSQL**: Modelo `UserModel` en AWS RDS gestionado mediante migraciones Alembic.
+- **Seguridad**: Hashes `bcrypt`, timestamps UTC con zona horaria, protección de contraseñas (exclusión de `hashed_password` en respuestas).
+- **Patrones de Resiliencia**: **Circuit Breaker** con fast-fail hacia caché EDA y **Rate Limiting** mediante middleware con ventana deslizante.
+- **Suite de Pruebas**: 12/12 pruebas unitarias y de integración en `test_taller4_auth.py`.
+
 ---
 
 ## 🚀 Despliegue en Render (1-Click Blueprint)

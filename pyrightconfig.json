@@ -1,0 +1,18 @@
+{
+  "include": [
+    "orders-service",
+    "catalog-service",
+    "analytics-service",
+    "*.py"
+  ],
+  "extraPaths": [
+    "orders-service",
+    "catalog-service",
+    "analytics-service",
+    "C:\\Users\\u\\AppData\\Roaming\\Python\\Python313\\site-packages",
+    "C:\\Python313\\Lib\\site-packages"
+  ],
+  "pythonPath": "C:\\Python313\\python.exe",
+  "reportMissingImports": "warning"
+}
+

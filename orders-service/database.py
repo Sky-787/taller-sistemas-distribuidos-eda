@@ -87,6 +87,37 @@ class OrderModel(Base):
         }
 
 
+class UserModel(Base):
+    """Modelo SQLAlchemy para usuarios del sistema con roles y contraseñas hasheadas (RBAC)."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    full_name = Column(String(255), nullable=False)
+    role = Column(String(50), nullable=False, default="user")
+    hashed_password = Column(String(255), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc)
+    )
+
+    def to_dict(self):
+        """Convierte el modelo a diccionario seguro para respuestas de API (sin hashed_password)."""
+        return {
+            "id": self.id,
+            "email": self.email,
+            "full_name": self.full_name,
+            "role": self.role,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+
+
+def get_user_by_email(db, email: str):
+    """Consulta un usuario en PostgreSQL a partir de su correo electrónico."""
+    return db.query(UserModel).filter(UserModel.email == email).first()
+
+
 def get_db():
     """Generador de sesión de base de datos para inyección de dependencias en FastAPI."""
     db = SessionLocal()
