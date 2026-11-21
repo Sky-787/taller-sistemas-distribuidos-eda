@@ -23,7 +23,16 @@ from auth import (
     require_role,
     oauth2_scheme
 )
-from resilience import catalog_circuit_breaker, CircuitState, RateLimitMiddleware
+from resilience import catalog_circuit_breaker, CircuitState
+from middleware import (
+    rate_limiter,
+    rate_limit_middleware,
+    catalog_circuit,
+    CircuitBreaker,
+    RateLimiter,
+    call_catalog_with_breaker,
+    retry_with_backoff,
+)
 
 # Configuración de Logging
 logging.basicConfig(level=logging.INFO)
@@ -31,12 +40,12 @@ logger = logging.getLogger("orders-service")
 
 app = FastAPI(
     title="Orders Service - Backend Avanzado",
-    description="Servicio de órdenes con PostgreSQL, Event-Driven Architecture, Autenticación JWT + RBAC, Circuit Breaker y Rate Limiting",
-    version="4.0.0"
+    description="Servicio de órdenes con PostgreSQL, Event-Driven Architecture, Autenticación JWT + RBAC, Circuit Breaker, Rate Limiting y Retry with Backoff (LAB 11)",
+    version="5.0.0"
 )
 
-# Middleware de Resiliencia: Rate Limiting
-app.add_middleware(RateLimitMiddleware)
+# Middleware de Resiliencia: Rate Limiting (Taller 5 / LAB 11)
+app.middleware("http")(rate_limit_middleware)
 
 # URLs de otros servicios (configurables por variables de entorno)
 CATALOG_SERVICE_URL = os.getenv("CATALOG_SERVICE_URL", "http://catalog-service:8001")
@@ -112,9 +121,9 @@ def on_startup():
 @app.get("/", tags=["Inicio"])
 def root():
     return {
-        "message": "Microservicio de Órdenes de Coworking (FastAPI + JWT + RBAC + EDA)",
+        "message": "Microservicio de Órdenes de Coworking (FastAPI + JWT + RBAC + EDA + Resiliencia)",
         "docs_url": "/docs",
-        "version": "4.0.0",
+        "version": "5.0.0",
         "endpoints": {
             "health": "/health",
             "auth_register": "/auth/register",
@@ -125,6 +134,10 @@ def root():
             "orders": "/orders",
             "catalog_cache": "/catalog-cache",
             "circuit_breaker": "/resilience/circuit-breaker",
+            "catalog_detail_resilient": "/resilience/catalog/{space_id}",
+            "retry_demo": "/resilience/retry-demo",
+            "rate_limiter_status": "/resilience/rate-limiter",
+            "circuit_breaker_reset": "/resilience/circuit-breaker/reset",
             "event_webhook": "/events/space-changed"
         }
     }
@@ -142,9 +155,9 @@ def health_check(db: Session = Depends(get_db)):
     return {
         "status": "ok" if db_status == "connected" else "degraded",
         "service": "orders-service",
-        "version": "4.0.0",
+        "version": "5.0.0",
         "database": db_status,
-        "circuit_breaker": catalog_circuit_breaker.get_status()["state"]
+        "circuit_breaker": catalog_circuit.state
     }
 
 
@@ -246,11 +259,86 @@ async def panel_superadmin(current_user: UserModel = Depends(require_role("super
     }
 
 
-# ─── Endpoints de Resiliencia ──────────────────────────────────────
+# ─── Endpoints de Resiliencia (LAB 11) ─────────────────────────────
 @app.get("/resilience/circuit-breaker", tags=["Resiliencia"])
 def get_circuit_breaker_status():
     """Retorna el estado de telemetría y salud del Circuit Breaker."""
-    return catalog_circuit_breaker.get_status()
+    status_data = catalog_circuit.get_status()
+    # Retrocompatibilidad con suite anterior
+    status_data["legacy_circuit_breaker"] = catalog_circuit_breaker.get_status()
+    return status_data
+
+
+@app.get("/resilience/catalog/{space_id}", tags=["Resiliencia"])
+async def get_catalog_space_resilient(space_id: int):
+    """
+    Consulta un espacio en catalog-service usando el Circuit Breaker (LAB 11).
+    - Si el circuito está abierto, retorna HTTP 503 de inmediato.
+    - Si falla 5 veces consecutivas, abre el circuito automáticamente.
+    - Timeout de 5 segundos por intento.
+    """
+    catalog_url = f"{CATALOG_SERVICE_URL}/spaces/{space_id}"
+    return await call_catalog_with_breaker(catalog_url)
+
+
+@app.post("/resilience/retry-demo", tags=["Resiliencia"])
+async def demo_retry_with_backoff(
+    fail_attempts: int = Query(2, description="Número de fallos simulados antes de tener éxito (0 a 3)"),
+    base_delay: float = Query(0.1, description="Retardo base en segundos para la prueba")
+):
+    """
+    Demostración interactiva de Retry with Backoff (LAB 11).
+    Ejecuta una operación asíncrona que simula fallos transitorios
+    con esperas progresivas: base_delay * (2 ** attempt).
+    """
+    attempt_counter = {"count": 0}
+
+    async def flaky_operation():
+        attempt_counter["count"] += 1
+        if attempt_counter["count"] <= fail_attempts:
+            raise RuntimeError(f"Fallo transitorio simulado en intento #{attempt_counter['count']}")
+        return {
+            "status": "success",
+            "message": f"Operación completada exitosamente en el intento #{attempt_counter['count']}",
+            "attempts_needed": attempt_counter["count"]
+        }
+
+    try:
+        result = await retry_with_backoff(flaky_operation, max_retries=3, base_delay=base_delay)
+        return result
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Operación falló definitivamente tras 3 intentos con backoff: {str(exc)}"
+        )
+
+
+@app.get("/resilience/rate-limiter", tags=["Resiliencia"])
+def get_rate_limiter_status():
+    """Retorna información y telemetría en tiempo real del Rate Limiter en memoria."""
+    import time
+    now = time.time()
+    tracked_clients = {
+        client: len([t for t in timestamps if now - t < rate_limiter.window_seconds])
+        for client, timestamps in list(rate_limiter.requests.items())
+    }
+    return {
+        "max_requests": rate_limiter.max_requests,
+        "window_seconds": rate_limiter.window_seconds,
+        "tracked_clients_count": len(tracked_clients),
+        "active_clients": tracked_clients
+    }
+
+
+@app.post("/resilience/circuit-breaker/reset", tags=["Resiliencia"])
+def reset_circuit_breaker():
+    """Restablece manualmente el Circuit Breaker al estado CLOSED."""
+    catalog_circuit.record_success()
+    catalog_circuit_breaker.record_success()
+    return {
+        "status": "reset",
+        "circuit_breaker": catalog_circuit.get_status()
+    }
 
 
 # ─── Endpoints de Órdenes ─────────────────────────────────────────
@@ -324,24 +412,21 @@ async def create_order(
     space_data = None
     fulfillment_source = FulfillmentSource.SYNCHRONOUS_CATALOG
 
-    # 1. Verificar Circuit Breaker antes de llamada síncrona
-    if not catalog_circuit_breaker.can_execute():
-        logger.warning(f"Circuit Breaker en estado {catalog_circuit_breaker.state.value}: cortocircuitando llamada a {catalog_url}")
+    # 1. Verificar Circuit Breaker y consultar catálogo síncrono (Taller 5 / LAB 11)
+    if not catalog_circuit.can_execute():
+        logger.warning(f"Circuit Breaker en estado {catalog_circuit.state}: cortocircuitando llamada a {catalog_url}")
     else:
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(catalog_url)
-                if response.status_code == 200:
-                    space_data = response.json()
-                    catalog_circuit_breaker.record_success()
-                elif response.status_code == 404:
-                    raise HTTPException(status_code=404, detail=f"Space with id {space_id} not found in catalog")
-                else:
-                    logger.warning(f"Error HTTP del catálogo síncrono: {response.status_code}")
-                    catalog_circuit_breaker.record_failure()
+            space_data = await call_catalog_with_breaker(catalog_url)
+            catalog_circuit_breaker.record_success()
+        except HTTPException as http_exc:
+            if http_exc.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Space with id {space_id} not found in catalog")
+            logger.warning(f"Catálogo síncrono no disponible vía Circuit Breaker ({http_exc.detail})")
+            catalog_circuit_breaker.record_failure()
+            if not enable_eda_fallback:
+                raise http_exc
         except Exception as exc:
-            if isinstance(exc, HTTPException):
-                raise exc
             logger.warning(f"Catálogo síncrono no responde en {catalog_url}: {exc}")
             catalog_circuit_breaker.record_failure()
             if not enable_eda_fallback:

@@ -156,3 +156,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         response.headers["X-RateLimit-Remaining"] = str(remaining)
         return response
 
+
+# ─── 3. RE-EXPORTACIONES TALLER 5 (LAB 11 - middleware.py) ────────
+from middleware import (
+    RateLimiter as MiddlewareRateLimiter,
+    CircuitBreaker as MiddlewareCircuitBreaker,
+    catalog_circuit,
+    call_catalog_with_breaker,
+    retry_with_backoff,
+    rate_limit_middleware,
+)
+
+
